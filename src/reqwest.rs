@@ -50,6 +50,10 @@ pub struct Client {
     /// Reconnection time in milliseconds. Note that the reconnection time can be changed by the
     /// event stream, so changing this may not make a difference.
     pub retry: Duration,
+
+    /// Default headers that should be applied to requests. If the conflict with per-request
+    /// headers they will be overwritten.
+    pub default_headers: Headers,
 }
 
 impl Client {
@@ -64,23 +68,18 @@ impl Client {
             last_event_id: None,
             last_try: None,
             retry: Duration::from_millis(DEFAULT_RETRY),
+            default_headers: Headers::new(),
         }
     }
 
     fn next_request(&mut self) -> Result<()> {
-        let mut headers = Headers::new();
-        headers.set(
-            Accept(vec![
-                   qitem(mime::TEXT_EVENT_STREAM),
-            ])
-        );
+        let mut headers = self.default_headers.clone();
+        headers.set(Accept(vec![qitem(mime::TEXT_EVENT_STREAM)]));
         if let Some(ref id) = self.last_event_id {
             headers.set_raw("Last-Event-ID", vec![id.as_bytes().to_vec()]);
         }
 
-        let res = self.client.get(self.url.clone())
-            .headers(headers)
-            .send()?;
+        let res = self.client.get(self.url.clone()).headers(headers).send()?;
 
         // Check status code and Content-Type.
         {
@@ -90,7 +89,9 @@ impl Client {
             }
             if let Some(&ContentType(ref content_type)) = res.headers().get::<ContentType>() {
                 // Compare type and subtype only, MIME parameters are ignored.
-                if (content_type.type_(), content_type.subtype()) != (mime::TEXT, mime::EVENT_STREAM) {
+                if (content_type.type_(), content_type.subtype()) !=
+                    (mime::TEXT, mime::EVENT_STREAM)
+                {
                     return Err(ErrorKind::InvalidContentType(content_type.clone()).into());
                 }
             } else {
@@ -148,7 +149,7 @@ impl Iterator for Client {
                                     self.last_event_id = Some(id.clone());
                                 }
                                 return Some(Ok(event));
-                            },
+                            }
                             ParseResult::SetRetry(ref retry) => {
                                 self.retry = *retry;
                             }
@@ -156,12 +157,8 @@ impl Iterator for Client {
                         line.clear();
                     }
                     // Nothing read from stream
-                    Ok(_) => {
-                        break None
-                    }
-                    Err(err) => {
-                        break Some(Err(::std::convert::From::from(err)))
-                    }
+                    Ok(_) => break None,
+                    Err(err) => break Some(Err(::std::convert::From::from(err))),
                 }
             }
         };
@@ -173,8 +170,7 @@ impl Iterator for Client {
                 self.response = None;
                 self.next()
             }
-            _ => result
+            _ => result,
         }
     }
 }
-
